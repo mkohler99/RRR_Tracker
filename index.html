@@ -240,12 +240,12 @@
 	}
 
 	.edit-input-row label {
-	  font-size: 10px;
+	  font-size: 9px;
 	  color: var(--muted);
 	}
 
 	.poke-input {
-	  width: 42px;
+	  width: 68px;
 	  padding: 1px 2px;
 	  font-size: 10px;
 	  border-radius: 4px;
@@ -561,6 +561,8 @@
   let randomSlotElements = [];
   let specialChatElement = null;
 
+  // ---------- Utility ----------
+
   function createSpriteSrc(num) {
 	const n = (Number(num) > 0 && Number(num) <= MAX_POKEMON) ? Number(num) : 0;
 	return `images/pokemon/${n}.png`;
@@ -571,6 +573,128 @@
 	if (isNaN(num) || num < 1 || num > MAX_POKEMON) return 0;
 	return num;
   }
+
+  // ---------- Name matching helpers ----------
+
+  function normalizeName(str) {
+	return (str || "")
+	  .toLowerCase()
+	  .replace(/[^a-z0-9]/g, "");
+  }
+
+  function levenshtein(a, b) {
+	const m = a.length;
+	const n = b.length;
+	if (m === 0) return n;
+	if (n === 0) return m;
+
+	const dp = new Array(n + 1);
+	for (let j = 0; j <= n; j++) dp[j] = j;
+
+	for (let i = 1; i <= m; i++) {
+	  let prev = dp[0];
+	  dp[0] = i;
+	  for (let j = 1; j <= n; j++) {
+		const temp = dp[j];
+		if (a[i - 1] === b[j - 1]) {
+		  dp[j] = prev;
+		} else {
+		  dp[j] = Math.min(prev + 1, dp[j] + 1, dp[j - 1] + 1);
+		}
+		prev = temp;
+	  }
+	}
+	return dp[n];
+  }
+
+  function findClosestPokemonByName(input) {
+	const q = normalizeName(input);
+	if (!q) return 0;
+
+	// 1) Exact normalized match
+	for (let i = 1; i <= MAX_POKEMON; i++) {
+	  const norm = normalizeName(pokemonNames[i] || "");
+	  if (norm === q) return i;
+	}
+
+	// 2) Prefix matches (choose shortest name)
+	const prefixMatches = [];
+	for (let i = 1; i <= MAX_POKEMON; i++) {
+	  const norm = normalizeName(pokemonNames[i] || "");
+	  if (norm.startsWith(q)) {
+		prefixMatches.push({ index: i, len: norm.length });
+	  }
+	}
+	if (prefixMatches.length > 0) {
+	  prefixMatches.sort((a, b) => a.len - b.len);
+	  return prefixMatches[0].index;
+	}
+
+	// 3) Substring matches (fallback before fuzzy)
+	const substringMatches = [];
+	for (let i = 1; i <= MAX_POKEMON; i++) {
+	  const norm = normalizeName(pokemonNames[i] || "");
+	  if (norm.includes(q)) {
+		substringMatches.push({ index: i, len: norm.length });
+	  }
+	}
+	if (substringMatches.length > 0) {
+	  substringMatches.sort((a, b) => a.len - b.len);
+	  return substringMatches[0].index;
+	}
+
+	// 4) Fuzzy match (Levenshtein) with threshold
+	let bestIndex = 0;
+	let bestScore = Infinity;
+	for (let i = 1; i <= MAX_POKEMON; i++) {
+	  const norm = normalizeName(pokemonNames[i] || "");
+	  if (!norm) continue;
+	  const d = levenshtein(q, norm);
+	  if (d < bestScore) {
+		bestScore = d;
+		bestIndex = i;
+	  }
+	}
+
+	const threshold = Math.max(1, Math.floor(q.length / 2));
+	if (bestScore <= threshold) return bestIndex;
+	return 0;
+  }
+
+  function parsePokemonInput(value) {
+	const raw = (value || "").trim();
+	if (!raw) return 0;
+
+	// Numeric only?
+	if (/^\d+$/.test(raw)) {
+	  return clampPokemonNumber(raw);
+	}
+
+	// Name lookup
+	return findClosestPokemonByName(raw);
+  }
+
+  // ---------- Slot helpers ----------
+
+  function setSectionNumber(section, index, num) {
+	if (section === "chat") {
+	  chatPicked[index] = num;
+	} else if (section === "player") {
+	  playerPicked[index] = num;
+	}
+  }
+
+  function updateBoxVisuals(num, imgEl, nameEl) {
+	if (!num) {
+	  imgEl.src = createSpriteSrc(0);
+	  nameEl.textContent = "";
+	} else {
+	  imgEl.src = createSpriteSrc(num);
+	  nameEl.textContent = pokemonNames[num] || "";
+	}
+  }
+
+  // ---------- UI creation ----------
 
   function createEditSlot(section, index) {
 	const box = document.createElement("div");
@@ -593,31 +717,57 @@
 	nameDiv.className = "poke-name";
 	nameDiv.textContent = "";
 
-	const inputRow = document.createElement("div");
-	inputRow.className = "edit-input-row";
+	// Number row
+	const numRow = document.createElement("div");
+	numRow.className = "edit-input-row";
 
-	const label = document.createElement("label");
-	label.textContent = "#";
+	const numLabel = document.createElement("label");
+	numLabel.textContent = "#";
 
-	const input = document.createElement("input");
-	input.type = "number";
-	input.min = "1";
-	input.max = String(MAX_POKEMON);
-	input.inputMode = "numeric";
-	input.className = "poke-input";
-	input.dataset.section = section;
-	input.dataset.index = String(index);
+	const numInput = document.createElement("input");
+	numInput.type = "number";
+	numInput.min = "1";
+	numInput.max = String(MAX_POKEMON);
+	numInput.inputMode = "numeric";
+	numInput.className = "poke-input poke-input-number";
+	numInput.placeholder = "no.";
+	numInput.dataset.section = section;
+	numInput.dataset.index = String(index);
 
-	input.addEventListener("input", () => {
-	  handleEditInput(section, index, input.value, img, nameDiv);
+	numLabel.appendChild(numInput);
+	numRow.appendChild(numLabel);
+
+	// Name row
+	const nameRow = document.createElement("div");
+	nameRow.className = "edit-input-row";
+
+	const nameLabel = document.createElement("label");
+	nameLabel.textContent = "Nm";
+
+	const nameInput = document.createElement("input");
+	nameInput.type = "text";
+	nameInput.inputMode = "text";
+	nameInput.className = "poke-input poke-input-name";
+	nameInput.placeholder = "name";
+	nameInput.dataset.section = section;
+	nameInput.dataset.index = String(index);
+
+	nameLabel.appendChild(nameInput);
+	nameRow.appendChild(nameLabel);
+
+	// Event handlers
+	numInput.addEventListener("input", () => {
+	  handleNumberChange(section, index, numInput, nameInput, img, nameDiv);
 	});
 
-	label.appendChild(input);
-	inputRow.appendChild(label);
+	nameInput.addEventListener("input", () => {
+	  handleNameChange(section, index, numInput, nameInput, img, nameDiv);
+	});
 
 	inner.appendChild(spriteWrap);
 	inner.appendChild(nameDiv);
-	inner.appendChild(inputRow);
+	inner.appendChild(numRow);
+	inner.appendChild(nameRow);
 	box.appendChild(inner);
 
 	if (section === "chat") {
@@ -667,22 +817,36 @@
 	return box;
   }
 
-  function handleEditInput(section, index, rawValue, imgEl, nameEl) {
-	const num = clampPokemonNumber(rawValue);
-	if (section === "chat") {
-	  chatPicked[index] = num;
-	} else if (section === "player") {
-	  playerPicked[index] = num;
-	}
+  function handleNumberChange(section, index, numInput, nameInput, imgEl, nameEl) {
+	const raw = (numInput.value || "").trim();
+	const num = clampPokemonNumber(raw);
 
-	if (!num) {
-	  imgEl.src = createSpriteSrc(0);
-	  nameEl.textContent = "";
+	setSectionNumber(section, index, num);
+	updateBoxVisuals(num, imgEl, nameEl);
+
+	if (num > 0) {
+	  nameInput.value = pokemonNames[num] || "";
 	} else {
-	  imgEl.src = createSpriteSrc(num);
-	  nameEl.textContent = pokemonNames[num] || "";
+	  nameInput.value = "";
 	}
 
+	afterPoolDataChanged();
+  }
+
+  function handleNameChange(section, index, numInput, nameInput, imgEl, nameEl) {
+	const raw = (nameInput.value || "").trim();
+	const num = parsePokemonInput(raw); // supports both "pikachu" and "25"
+
+	setSectionNumber(section, index, num);
+	updateBoxVisuals(num, imgEl, nameEl);
+
+	if (num > 0) {
+	  numInput.value = String(num);
+	} else {
+	  numInput.value = "";
+	}
+
+	// Do NOT overwrite nameInput.value so user can keep typing/refining
 	afterPoolDataChanged();
   }
 
@@ -705,6 +869,8 @@
 	  playerGrid.appendChild(slot);
 	}
   }
+
+  // ---------- Random pool ----------
 
   function regenerateRandomPool() {
 	const forbidden = new Set(chatPicked.filter(n => n > 0));
@@ -767,6 +933,8 @@
 	});
   }
 
+  // ---------- Pool + team logic ----------
+
   function getPoolNumbers(includeSpecial = true) {
 	const list = [];
 	chatPicked.forEach(n => { if (n > 0) list.push(n); });
@@ -783,7 +951,7 @@
 	Object.keys(faintedMap).forEach(key => {
 	  const num = Number(key);
 	  if (!poolSet.has(num)) {
-		delete faintedMap[key];
+		delete faintedMap[num];
 	  }
 	});
   }
@@ -891,7 +1059,7 @@
 	const container = document.getElementById("team-grid");
 	container.innerHTML = "";
 
-	currentTeam.forEach((num, idx) => {
+	currentTeam.forEach((num) => {
 	  const box = document.createElement("div");
 	  box.className = "pokemon-box large team-slot";
 	  if (num && faintedMap[num]) {
@@ -1029,10 +1197,12 @@
 	chatSlotElements.forEach((box) => {
 	  const img = box.querySelector(".sprite");
 	  const nameDiv = box.querySelector(".poke-name");
-	  const input = box.querySelector(".poke-input");
+	  const numInput = box.querySelector(".poke-input-number");
+	  const nameInput = box.querySelector(".poke-input-name");
 	  img.src = createSpriteSrc(0);
 	  nameDiv.textContent = "";
-	  input.value = "";
+	  if (numInput) numInput.value = "";
+	  if (nameInput) nameInput.value = "";
 	});
 	afterPoolDataChanged();
   }
@@ -1042,10 +1212,12 @@
 	playerSlotElements.forEach((box) => {
 	  const img = box.querySelector(".sprite");
 	  const nameDiv = box.querySelector(".poke-name");
-	  const input = box.querySelector(".poke-input");
+	  const numInput = box.querySelector(".poke-input-number");
+	  const nameInput = box.querySelector(".poke-input-name");
 	  img.src = createSpriteSrc(0);
 	  nameDiv.textContent = "";
-	  input.value = "";
+	  if (numInput) numInput.value = "";
+	  if (nameInput) nameInput.value = "";
 	});
 	afterPoolDataChanged();
   }
